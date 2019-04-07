@@ -613,6 +613,22 @@ public:
   }
 
 
+  bool ping(GsmConstStr server)
+  {
+    sendAT(GF("+CIPPING=\""), server, GF("\",4"));
+    for (int i = 0; i < 4; ++i) {
+      if (waitResponse(10000L, GF(GSM_NL "+CIPPING:")) != 1) {
+        return false;
+      }
+      streamSkipUntil(','); //skip replyId
+      streamSkipUntil(','); //skip ip address
+      int replyTime = stream.readStringUntil(',').toInt();
+      if (replyTime == 600) return false;
+    }
+    return waitResponse() == 1;
+  }
+
+
   /*
    * Phone Call functions
    */
