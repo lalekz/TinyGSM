@@ -903,6 +903,36 @@ public:
     return res;
   }
 
+  bool enableNTPTimeSync(bool onoff, GsmConstStr ntpserver=0)
+  {
+    if (onoff) {
+      sendAT(GF("+CNTPCID=1"));
+      if (waitResponse() != 1)
+        return false;
+
+      sendAT(GF("+CNTP=\""), (ntpserver != 0) ?
+        ntpserver : GF("pool.ntp.org"), GF("\",0"));
+      if (waitResponse() != 1)
+        return false;
+
+      sendAT(GF("+CNTP"));
+      if (waitResponse(10000L, GF(GSM_NL "+CNTP:")) != 1) {
+        return false;
+      }
+
+      int res = stream.readStringUntil('\n').toInt();
+      waitResponse();
+      if (res != 1)
+        return false;
+    } else {
+      sendAT(GF("+CNTPCID=0"));
+      if (waitResponse() != 1)
+        return false;
+    }
+
+    return true;
+  }
+
   /*
    * Battery functions
    */
