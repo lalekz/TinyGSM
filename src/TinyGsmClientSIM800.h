@@ -695,6 +695,65 @@ public:
     }
   }
 
+  int getNumSMS() {
+    int numsms;
+
+    sendAT(GF("+CMGF=1"));
+    if (waitResponse() != 1) return -1;
+
+    sendAT(GF("+CPMS=\"SM\""));
+    if (waitResponse(1000, GF(GSM_NL "+CPMS:")) != 1) {
+      return -1;
+    }
+
+    numsms = stream.readStringUntil(',').toInt();
+    waitResponse();
+    return numsms;
+  }
+
+  bool readSMS(int idx, String& sender, String& text) {
+    // text mode
+    sendAT(GF("+CMGF=1"));
+    if (waitResponse() != 1) return false;
+    sendAT(GF("+CSCS=\"HEX\""));
+    if (waitResponse() != 1) return false;
+    sendAT(GF("+CSMP=17,167,0,8"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CPMS=\"SM\""));
+    if (waitResponse() != 1) return false;
+
+    // show all text mode parameters
+    sendAT(GF("+CSDH=1"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CMGR="), idx);
+    if (waitResponse(GF("+CMGR:")) != 1) return false;
+    streamSkipUntil(','); streamSkipUntil('\"'); // Skip stat
+    sender = TinyGsmDecodeHex8bit(stream.readStringUntil('\"'));
+    streamSkipUntil('\"'); streamSkipUntil('\"'); // Skip alpha
+    streamSkipUntil('\"'); streamSkipUntil('\"'); // Skip scts
+    streamSkipUntil(','); streamSkipUntil(','); // Skip tooa
+    streamSkipUntil(','); // Skip fo
+    streamSkipUntil(','); // Skip pid
+    int dcs = stream.readStringUntil(',').toInt();
+    streamSkipUntil('\n');
+
+    String hex = stream.readStringUntil('\n');
+    hex.trim();
+
+    if (dcs == 8) {
+      text = TinyGsmDecodeHex16bit(hex);
+    } else if (dcs == 0) {
+      text = TinyGsmDecodeHex8bit(hex);
+    } else {
+      text = hex;
+    }
+
+    waitResponse();
+    return true;
+  }
+
   bool sendSMS(const String& number, const String& text) {
     sendAT(GF("+CMGF=1"));
     waitResponse();
@@ -738,6 +797,54 @@ public:
     return waitResponse(60000L) == 1;
   }
 
+  bool deleteSMS(uint8_t i) {
+    sendAT(GF("+CMGF=1"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CPMS=\"SM\""));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CMGD="), i);
+    return waitResponse() == 1;
+  }
+
+  bool readSMS(String& sender, String& text)
+  {
+    sendAT(GF("+CMGF=1"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CPMS=\"SM\""));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CMGL=\"REC UNREAD\",1"));
+    if (waitResponse(10000L, GF(GSM_NL "+CMGL:")) != 1) return false;
+    int index = stream.readStringUntil(',').toInt();
+    if (waitResponse() != 1) return false;
+
+    return readSMS(index, sender, text);
+  }
+
+  bool deleteReadSMS() {
+    sendAT(GF("+CMGF=1"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CPMS=\"SM\""));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CMGDA=\"DEL READ\""));
+    return waitResponse() == 1;
+  }
+
+  bool deleteAllSMS() {
+    sendAT(GF("+CMGF=1"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CPMS=\"SM\""));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CMGDA=\"DEL ALL\""));
+    return waitResponse() == 1;
+  }
 
   /*
    * Location functions
