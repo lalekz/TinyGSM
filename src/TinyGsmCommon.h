@@ -32,7 +32,7 @@
 #endif
 
 #if !defined(TINY_GSM_RX_BUFFER)
-  #define TINY_GSM_RX_BUFFER 256
+  #define TINY_GSM_RX_BUFFER 64
 #endif
 
 #define TINY_GSM_ATTR_NOT_AVAILABLE __attribute__((error("Not available on this modem type")))
@@ -315,10 +315,14 @@ public:
 
     bool streamSkipUntil(const char c, const unsigned long timeout = 1000L) {
       unsigned long startMillis = millis();
-      while (millis() - startMillis < timeout) {
-        while (millis() - startMillis < timeout && !stream.available()) {
+      while (true) {
+        while (!stream.available()) {
           TINY_GSM_YIELD();
+          if (millis() - startMillis > timeout)
+            return false;
+          delay(50);
         }
+
         if (stream.read() == c)
           return true;
       }

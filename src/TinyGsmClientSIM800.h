@@ -95,21 +95,11 @@ public:
 
   virtual void stop() {
     TINY_GSM_YIELD();
-    // Read and dump anything remaining in the modem's internal buffer.
-    // The socket will appear open in response to connected() even after it
-    // closes until all data is read from the buffer.
-    // Doing it this way allows the external mcu to find and get all of the data
-    // that it wants from the socket even if it was closed externally.
-    rx.clear();
-    at->maintain();
-    while (sock_available > 0) {
-      sock_available -= at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux);
-      rx.clear();
-      at->maintain();
-    }
     at->sendAT(GF("+CIPCLOSE="), mux, GF(",1"));  // Quick close
     sock_connected = false;
     at->waitResponse();
+    rx.clear();
+    sock_available = 0;
   }
 
   virtual size_t write(const uint8_t *buf, size_t size) {
@@ -133,7 +123,7 @@ public:
       // Workaround: sometimes SIM800 forgets to notify about data arrival.
       // TODO: Currently we ping the module periodically,
       // but maybe there's a better indicator that we need to poll
-      if (millis() - prev_check > 250) {
+      if (millis() - prev_check > 500) {
         got_data = true;
         prev_check = millis();
       }
@@ -157,14 +147,15 @@ public:
       // Workaround: sometimes SIM800 forgets to notify about data arrival.
       // TODO: Currently we ping the module periodically,
       // but maybe there's a better indicator that we need to poll
-      if (millis() - prev_check > 250) {
+      if (millis() - prev_check > 500) {
         got_data = true;
         prev_check = millis();
       }
       at->maintain();
       // TODO: Read directly into user buffer?
       if (sock_available > 0) {
-        sock_available -= at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux);
+        at->modemRead(rx.free(), mux);
+        prev_check = millis();
       } else {
         break;
       }
@@ -488,7 +479,7 @@ public:
   /*
    * GPRS functions
    */
-  bool gprsConnect(const char* apn, const char* user = NULL, const char* pwd = NULL) {
+  bool gprsConnect(GsmConstStr apn, GsmConstStr user, GsmConstStr pwd) {
     gprsDisconnect();
 
     // Set the Bearer for the IP
@@ -498,11 +489,11 @@ public:
     sendAT(GF("+SAPBR=3,1,\"APN\",\""), apn, '"');  // Set the APN
     waitResponse();
 
-    if (user && strlen(user) > 0) {
+    if (user) {
       sendAT(GF("+SAPBR=3,1,\"USER\",\""), user, '"');  // Set the user name
       waitResponse();
     }
-    if (pwd && strlen(pwd) > 0) {
+    if (pwd) {
       sendAT(GF("+SAPBR=3,1,\"PWD\",\""), pwd, '"');  // Set the password
       waitResponse();
     }
@@ -676,10 +667,10 @@ public:
    * Messaging functions
    */
 
-  String sendUSSD(const String& code) {
+  String sendUSSD(GsmConstStr code) {
     sendAT(GF("+CMGF=1"));
     waitResponse();
-    sendAT(GF("+CSCS=\"HEX\""));
+    sendAT(GF("+CSCS=\"GSM\""));
     waitResponse();
     sendAT(GF("+CUSD=1,\""), code, GF("\""));
     if (waitResponse() != 1) {
@@ -688,17 +679,19 @@ public:
     if (waitResponse(10000L, GF(GSM_NL "+CUSD:")) != 1) {
       return "";
     }
-    stream.readStringUntil('"');
+    streamSkipUntil('"');
     String hex = stream.readStringUntil('"');
-    stream.readStringUntil(',');
+    streamSkipUntil(',');
     int dcs = stream.readStringUntil('\n').toInt();
 
     if (dcs == 15) {
       return TinyGsmDecodeHex8bit(hex);
     } else if (dcs == 72) {
       return TinyGsmDecodeHex16bit(hex);
+    } else if (dcs == 0 && hex.startsWith("00")) {
+      return TinyGsmDecodeHex16bit(hex);
     } else {
-      return hex;
+      return "";
     }
   }
 
@@ -841,7 +834,7 @@ protected:
     return (1 == rsp);
   }
 
-  int16_t modemSend(const void* buff, size_t len, uint8_t mux) {
+  int modemSend(const void* buff, size_t len, uint8_t mux) {
     sendAT(GF("+CIPSEND="), mux, ',', len);
     if (waitResponse(GF(">")) != 1) {
       return 0;
@@ -858,16 +851,15 @@ protected:
   size_t modemRead(size_t size, uint8_t mux) {
 #ifdef TINY_GSM_USE_HEX
     sendAT(GF("+CIPRXGET=3,"), mux, ',', size);
-    if (waitResponse(GF("+CIPRXGET:")) != 1) {
+    if (waitResponse(GF("+CIPRXGET: 3,")) != 1) {
       return 0;
     }
 #else
     sendAT(GF("+CIPRXGET=2,"), mux, ',', size);
-    if (waitResponse(GF("+CIPRXGET:")) != 1) {
+    if (waitResponse(GF("+CIPRXGET: 2,")) != 1) {
       return 0;
     }
 #endif
-    streamSkipUntil(','); // Skip mode 2/3
     streamSkipUntil(','); // Skip mux
     size_t len = stream.readStringUntil(',').toInt();
     sockets[mux]->sock_available = stream.readStringUntil('\n').toInt();
@@ -892,8 +884,7 @@ protected:
   size_t modemGetAvailable(uint8_t mux) {
     sendAT(GF("+CIPRXGET=4,"), mux);
     size_t result = 0;
-    if (waitResponse(GF("+CIPRXGET:")) == 1) {
-      streamSkipUntil(','); // Skip mode 4
+    if (waitResponse(GF("+CIPRXGET: 4,")) == 1) {
       streamSkipUntil(','); // Skip mux
       result = stream.readStringUntil('\n').toInt();
       waitResponse();
@@ -960,17 +951,12 @@ public:
         } else if (r5 && data.endsWith(r5)) {
           index = 5;
           goto finish;
-        } else if (data.endsWith(GF(GSM_NL "+CIPRXGET:"))) {
-          String mode = stream.readStringUntil(',');
-          if (mode.toInt() == 1) {
-            int mux = stream.readStringUntil('\n').toInt();
-            if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
-              sockets[mux]->got_data = true;
-            }
-            data = "";
-          } else {
-            data += mode;
+        } else if (data.endsWith(GF(GSM_NL "+CIPRXGET: 1,"))) {
+          int mux = stream.readStringUntil('\n').toInt();
+          if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
+            sockets[mux]->got_data = true;
           }
+          data = "";
         } else if (data.endsWith(GF("CLOSED" GSM_NL))) {
           int nl = data.lastIndexOf(GSM_NL, data.length()-8);
           int coma = data.indexOf(',', nl+2);
@@ -982,6 +968,7 @@ public:
           DBG("### Closed: ", mux);
         }
       }
+      delay(50);
     } while (millis() - startMillis < timeout);
 finish:
     if (!index) {
