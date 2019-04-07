@@ -27,6 +27,10 @@
 
 #include <TinyGsmFifo.h>
 
+#include <codecvt>
+#include <string>
+#include <locale>
+
 #ifndef TINY_GSM_YIELD
   #define TINY_GSM_YIELD() { delay(0); }
 #endif
@@ -162,7 +166,7 @@ String TinyGsmDecodeHex7bit(String &instr) {
 }
 
 static inline
-String TinyGsmDecodeHex8bit(String &instr) {
+String TinyGsmDecodeHex8bit(const String &instr) {
   String result;
   for (unsigned i=0; i<instr.length(); i+=2) {
     char buf[4] = { 0, };
@@ -175,28 +179,24 @@ String TinyGsmDecodeHex8bit(String &instr) {
 }
 
 static inline
-String TinyGsmDecodeHex16bit(String &instr) {
-  String result;
-  for (unsigned i=0; i<instr.length(); i+=4) {
-    char buf[4] = { 0, };
-    buf[0] = instr[i];
-    buf[1] = instr[i+1];
-    char b = strtol(buf, NULL, 16);
-    if (b) { // If high byte is non-zero, we can't handle it ;(
-#if defined(TINY_GSM_UNICODE_TO_HEX)
-      result += "\\x";
-      result += instr.substring(i, i+4);
-#else
-      result += "?";
-#endif
-    } else {
+String TinyGsmDecodeHex16bit(const String &instr) {
+  std::u16string utf16Str;
+  for (unsigned i = 0; i+3 < instr.length(); i += 4) {
+      char wch[2];
+
+      char buf[3] = { 0, };
+      buf[0] = instr[i];
+      buf[1] = instr[i+1];
+      wch[1] = strtol(buf, NULL, 16);
       buf[0] = instr[i+2];
       buf[1] = instr[i+3];
-      b = strtol(buf, NULL, 16);
-      result += b;
-    }
+      wch[0] = strtol(buf, NULL, 16);
+
+      utf16Str += *reinterpret_cast<char16_t*>(wch);
   }
-  return result;
+
+  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> converter;
+  return converter.to_bytes(utf16Str).c_str();
 }
 
 
